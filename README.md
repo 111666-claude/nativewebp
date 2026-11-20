@@ -11,6 +11,32 @@ Currently, the encoder supports only WebP lossless images (VP8L).
 ## Decoding Support
 
 We provide WebP decoding through a wrapper around `golang.org/x/image/webp`, with an additional `DecodeIgnoreAlphaFlag` function to handle VP8X images where the alpha flag causes decoding issues.
+
+### Decoding animations
+
+`DecodeAnimation` reads an animated WebP (a `VP8X` container with `ANIM` and `ANMF` chunks) and returns every frame composited onto the full canvas. It honors per-frame offsets, durations, blending (alpha or source copy) and disposal (keep or clear to the background color), and preserves the loop count and background color. Lossless `VP8L` frame data, including transparency, is fully supported, so animations written with `EncodeAll` round-trip.
+
+Reads are capped at 256 MiB and decoded pixel memory is bounded; corrupt input (bad chunk lengths, frames outside the canvas, zero durations, a missing canvas, oversized or truncated data) returns an error instead of allocating unbounded memory. The static `Decode` behavior is unchanged and still handles single images.
+
+```Go
+animated, err := nativewebp.DecodeAnimation(file)
+if err != nil {
+  log.Fatalf("Error decoding WebP animation: %v", err)
+}
+
+for i, frame := range animated.Frames {
+  // frame.Image is the full-canvas image after compositing
+  // frame.FrameImage is the frame's own sub-rectangle at its canvas offset
+  // frame.Duration is the display time in milliseconds
+  _ = i
+  _ = frame
+}
+
+// Re-encode a decoded animation, preserving frames, timing and placement.
+var out bytes.Buffer
+err = nativewebp.EncodeAll(&out, animated.ToAnimation(), nil)
+```
+
 ## Benchmark
 
 We conducted a quick benchmark to showcase file size reduction and encoding performance. Using an image from Google’s WebP Lossless and Alpha Gallery, we compared the results of our nativewebp encoder with the standard PNG encoder. <br/><br/>

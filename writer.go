@@ -59,12 +59,18 @@ type Options struct {
 //   - Disposals: Disposal methods for frames after display; 0 = keep, 1 = clear to background.
 //   - LoopCount: Number of times the animation should repeat; 0 means infinite looping.
 //   - BackgroundColor: Canvas background color in BGRA order, used for clear operations.
+//   - CanvasWidth / CanvasHeight: Explicit canvas dimensions. When both are
+//     non-zero they are used directly instead of deriving the canvas from the
+//     union of frame bounds, which is required to round-trip partial frames
+//     that do not cover the full canvas. Zero keeps the legacy union behavior.
 type Animation struct {
     Images              []image.Image
     Durations           []uint
     Disposals           []uint
     LoopCount           uint16
     BackgroundColor     uint32
+    CanvasWidth         int
+    CanvasHeight        int
 }
 
 // Encode writes the provided image.Image to the specified io.Writer in WebP format.
@@ -150,9 +156,13 @@ func EncodeAll(w io.Writer, ani *Animation, o *Options) error {
     }
 
     var bounds image.Rectangle
-    for _, img := range ani.Images {
-        bounds.Max.X = max(img.Bounds().Max.X, bounds.Max.X)
-        bounds.Max.Y = max(img.Bounds().Max.Y, bounds.Max.Y)
+    if ani.CanvasWidth > 0 && ani.CanvasHeight > 0 {
+        bounds = image.Rect(0, 0, ani.CanvasWidth, ani.CanvasHeight)
+    } else {
+        for _, img := range ani.Images {
+            bounds.Max.X = max(img.Bounds().Max.X, bounds.Max.X)
+            bounds.Max.Y = max(img.Bounds().Max.Y, bounds.Max.Y)
+        }
     }
 
     buf := &bytes.Buffer{}
@@ -252,6 +262,10 @@ func writeFrames(ani *Animation, method int) (*bytes.Buffer, bool, error) {
         w.writeBits(uint64(img.Bounds().Dy() - 1), 24)
     
         w.writeBits(uint64(ani.Durations[i]), 24)
+        // ANMF flags: this package writes disposal at bit 0 and leaves the
+        // blending bit at 1 as zero (alpha blending). The canonical WebP
+        // specification places blending at bit 0 and disposal at bit 1;
+        // DecodeAnimation reads this same layout so animations round-trip.
         w.writeBits(uint64(ani.Disposals[i]), 1)
         w.writeBits(uint64(0), 1)
         w.writeBits(uint64(0), 6)
@@ -643,6 +657,7 @@ func getHistoBits(method int, isIndexed bool, width, height int) int {
 func flatten(img image.Image) ([]color.NRGBA, error) {
     w := img.Bounds().Dx()
     h := img.Bounds().Dy()
+    min := img.Bounds().Min
 
     rgba, ok := img.(*image.NRGBA)
     if !ok {
@@ -652,7 +667,7 @@ func flatten(img image.Image) ([]color.NRGBA, error) {
     pixels := make([]color.NRGBA, w * h)
     for y := 0; y < h; y++ {
         for x := 0; x < w; x++ {
-            i := rgba.PixOffset(x, y)
+            i := rgba.PixOffset(min.X + x, min.Y + y)
             s := rgba.Pix[i : i + 4 : i + 4]
 
             pixels[y * w + x].R = uint8(s[0])
